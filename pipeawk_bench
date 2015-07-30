@@ -1,0 +1,185 @@
+#!bin/bash
+#
+# テストに利用するブロックデバイスの名前
+BLOCK_NAME=sda
+BLOCK_SECTOR_SIZE=512
+LOG_DIR=log/
+HOSTNAME=`hostname -s`
+
+if [ -e ./config ]; then
+	. ./config
+fi
+
+mkdir -p $LOG_DIR
+
+parse_block_stat() {
+	local stat="$*"
+# https://www.kernel.org/doc/Documentation/block/stat.txt
+if [[ "$stat" =~ ^([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+)[[:space:]]+([0-9]+) ]]; then
+	
+	# for i in `seq 1 11`; do
+	#		echo $i ${BASH_REMATCH[$i]}
+	#done
+
+	ret_stat_r_ios=${BASH_REMATCH[1]} 
+	ret_stat_r_merges=${BASH_REMATCH[2]} 
+	ret_stat_r_sectors=${BASH_REMATCH[3]} 
+	ret_stat_r_ticks=${BASH_REMATCH[4]} 
+	ret_stat_w_ios=${BASH_REMATCH[5]} 
+	ret_stat_w_merges=${BASH_REMATCH[6]}
+	ret_stat_w_sectors=${BASH_REMATCH[7]}
+	ret_stat_w_ticks=${BASH_REMATCH[8]}
+fi
+}
+
+blk_stat_reset() {
+	parse_block_stat `cat /sys/block/$BLOCK_NAME/stat`
+
+	orig_stat_r_ios=$ret_stat_r_ios
+	orig_stat_r_merges=$ret_stat_r_merges
+	orig_stat_r_sectors=$ret_stat_r_sectors
+	orig_stat_r_ticks=$ret_stat_r_ticks
+	orig_stat_w_ios=$ret_stat_w_ios
+	orig_stat_w_merges=$ret_stat_w_merges
+	orig_stat_w_sectors=$ret_stat_w_sectors
+	orig_stat_w_ticks=$ret_stat_w_ticks
+}
+
+blk_stat_calc() {
+	parse_block_stat `cat /sys/block/$BLOCK_NAME/stat`
+
+	delta_stat_r_ios=$(($ret_stat_r_ios - $orig_stat_r_ios))
+	delta_stat_r_merges=$(($ret_stat_r_merges - $orig_stat_r_merges))
+	delta_stat_r_sectors=$(($ret_stat_r_sectors - $orig_stat_r_sectors))
+	delta_stat_r_ticks=$(($ret_stat_r_ticks - $orig_stat_r_ticks))
+	delta_stat_w_ios=$(($ret_stat_w_ios - $orig_stat_w_ios))
+	delta_stat_w_merges=$(($ret_stat_w_merges - $orig_stat_w_merges))
+	delta_stat_w_sectors=$(($ret_stat_w_sectors - $orig_stat_w_sectors))
+	delta_stat_w_ticks=$(($ret_stat_w_ticks - $orig_stat_w_ticks))
+}
+
+blk_stat_log() {
+	echo r_ios=$delta_stat_r_ios
+	echo r_merges=$delta_stat_r_merges
+	echo r_sectors=$delta_stat_r_sectors
+	echo r_ticks=$delta_stat_r_ticks
+	echo w_ios=$delta_stat_w_ios
+	echo w_merges=$delta_stat_w_merges
+	echo w_sectors=$delta_stat_w_sectors
+	echo w_ticks=$delta_stat_w_ticks
+}
+
+purge_results() {
+	rm -f result?.txt
+}
+
+drop_cache() {
+	sync
+	echo 3 > /proc/sys/vm/drop_caches
+	sleep 5
+}	
+
+vmstat_stop_log() {
+	sleep 1
+	killall vmstat 2>/dev/null
+}
+
+vmstat_start_log() {
+	local log_file=$1
+	vmstat_stop_log
+	vmstat -n 1 > $log_file &
+}
+
+iostat_stop_log() {
+	sleep 1
+	killall iostat 2>/dev/null
+}
+
+iostat_start_log() {
+	local log_file=$1
+	iostat_stop_log
+	iostat -mtx 1 > $log_file &
+}
+
+set_log_filename() {
+	log_vmstat=$log_prefix.vmstat.txt
+	log_iostat=$log_prefix.iostat.txt
+	log_time=$log_prefix.time.txt
+	log_awk_out=$log_prefix.awk_out.txt
+	log_blk_stat=$log_prefix.blk_stat.txt
+	log_summary=$log_prefix.summary.txt
+}
+
+
+bench_start() {
+        echo "# ==== start test $log_prefix ===="
+	set_log_filename
+	dmidecode > $log_prefix.dmidecode.txt
+	mount > $log_prefix.mount.txt
+	cat /proc/cpuinfo > $log_prefix.cpuinfo.txt
+	echo "ra: `blockdev --getra /dev/$BLOCK_NAME`" >> $log_prefix.readahead.txt
+	echo "fra: `blockdev --getfra /dev/$BLOCK_NAME`" >> $log_prefix.readahead.txt
+	drop_cache
+	blk_stat_reset
+	vmstat_start_log $log_vmstat
+	iostat_start_log $log_iostat
+}
+
+bench_show_summary() {
+	echo "[Summary]"
+	echo HOSTAME=$HOSTNAME
+	echo PWD=$PWD
+	head -n 1 $log_time
+	filefrag sample.txt
+	filefrag $log_awk_out
+	md5sum $log_awk_out
+	echo read $(($BLOCK_SECTOR_SIZE * $delta_stat_r_sectors)) bytes, wrote $(($BLOCK_SECTOR_SIZE * $delta_stat_w_sectors)) bytes
+}
+
+bench_end() {
+	sync
+	sleep 1
+	vmstat_stop_log
+	iostat_stop_log
+	blk_stat_calc
+	blk_stat_log > $log_blk_stat
+	bench_show_summary | tee $log_summary	
+}
+
+
+bench_no_pipe() {
+	log_prefix="$LOG_DIR/$HOSTNAME.`date +"%Y%m%d_%H%M".no_pipe`"
+	bench_start
+	/usr/bin/time -o $log_time bash -x -c "awk '\$5 ~ /00$/ {print}' sample.txt > $log_awk_out"
+	bench_end
+}
+
+bench_pipe() {
+	log_prefix="$LOG_DIR/$HOSTNAME.`date +"%Y%m%d_%H%M".pipe`"
+	bench_start
+	/usr/bin/time -o $log_time bash -x -c "cat sample.txt | awk '\$5 ~ /00$/ {print}' > $log_awk_out"
+	bench_end
+}
+
+create_sampletxt() {
+	if [ ! -e "sample.txt" ]; then
+		echo -n 'Generating sample.txt... '
+		perl -MTime::Piece -e 'printf(qq/%08d %08d %08d %08d %s\n/,$_,2..4,$t=localtime->datetime) for 1..50000000' > sample.txt
+		#perl -MTime::Piece -e 'printf(qq/%08d %08d %08d %08d %s\n/,$_,2..4,$t=localtime->datetime) for 1..5000000' > sample.txt
+		echo 'done!'
+		md5sum sample.txt
+	fi	
+}
+
+show_environment() {
+	echo "# ==== Environment ===="
+	dmidecode | grep 'Product Name:'
+	dmidecode | grep 'Version: Intel'
+}
+
+create_sampletxt
+show_environment
+
+bench_no_pipe
+bench_pipe
+
