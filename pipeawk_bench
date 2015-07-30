@@ -98,7 +98,7 @@ iostat_stop_log() {
 iostat_start_log() {
 	local log_file=$1
 	iostat_stop_log
-	iostat -mtx 1 > $log_file &
+	iostat -mtx 1 | grep ^$BLOCK_NAME > $log_file &
 }
 
 set_log_filename() {
