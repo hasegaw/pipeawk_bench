@@ -1,0 +1,8 @@
+r_ios=21523
+r_merges=392
+r_sectors=5478568
+r_ticks=42817
+w_ios=157
+w_merges=11960
+w_sectors=96936
+w_ticks=19851

@@ -1,0 +1,8 @@
+[Summary]
+HOSTAME=haswell
+PWD=/root/pipeawk_bench
+32.58user 1.95system 0:38.93elapsed 88%CPU (0avgtext+0avgdata 4576maxresident)k
+sample.txt: 6 extents found
+log//haswell.20150730_1252.pipe.awk_out.txt: 1 extent found
+358337d2c5e777fbde85f5cd5294d40a  log//haswell.20150730_1252.pipe.awk_out.txt
+read 2804576256 bytes, wrote 49680384 bytes
